@@ -7,7 +7,7 @@
 #
 # 사용법 (콘솔 위저드가 이 형태로 원라이너를 생성한다 — 인터페이스 동결):
 #   파이프 실행 (파일을 남기지 않는다 — 기본 권장):
-#     curl -fsSL https://raw.githubusercontent.com/yskim-tscorp/clickeye-dist/main/install.sh \
+#     curl -fsSL https://raw.githubusercontent.com/AX-Tscorp/clickeye-dist/main/install.sh \
 #       | sudo sh -s -- --project <이름> --cloud-url wss://<host>/ws/daemon --token <토큰>
 #   파일 실행 (폐쇄망·수동 반입):
 #     sudo sh install.sh --project <이름> --cloud-url wss://<host>/ws/daemon --token <토큰> \
@@ -77,6 +77,7 @@ usage() {
                       공개 배포 채널 최신 릴리스를 받아 SHA256SUMS 로 검증 후 설치)
   --zip <경로|URL>   압축 안의 daemond 를 꺼내 설치 (.zip / .tar.gz)
   --sha256 <값|파일> --zip 아카이브의 SHA-256. 없으면 검증을 건너뛴다(경고).
+                     평문 http:// URL 은 이 값 없이는 받지 않는다.
   --git <repo-url>   clone 후 go build (Go 툴체인 필요 / 비공개 리포는 자격증명 필요)
   --git-ref <ref>    --git 과 함께 — 브랜치·태그·커밋
   --channel <이름>   공개 배포 채널에서 받을 때의 채널 (기본: stable)
@@ -391,10 +392,10 @@ download_to() {
 # 소스 리포는 비공개이므로 배포 전용 공개 리포가 채널이다(ADR-0011). `latest` 를 쓰는 것은
 # 이 스크립트가 이미 멱등하게 "재실행 = 업그레이드"로 설계돼 있기 때문이다 — 특정 버전에
 # 고정해야 하는 납품은 그 태그의 자산 URL 을 `--zip` 으로 직접 주면 된다.
-DIST_RELEASE_BASE='https://github.com/yskim-tscorp/clickeye-dist/releases/latest/download'
+DIST_RELEASE_BASE='https://github.com/AX-Tscorp/clickeye-dist/releases/latest/download'
 # edge 채널 — main 에 데몬 쪽 변경이 들어올 때마다 다시 만들어지는 사전 릴리스 하나(`edge`). 릴리스 전 판이라
 # 기본이 아니다: `--channel edge` 를 준 설치(우리 검증 서버)만 받는다. `latest` 는 사전 릴리스를 가리키지 않는다.
-DIST_EDGE_BASE='https://github.com/yskim-tscorp/clickeye-dist/releases/download/edge'
+DIST_EDGE_BASE='https://github.com/AX-Tscorp/clickeye-dist/releases/download/edge'
 
 # resolve_release_asset — 이 호스트에 맞는 자산 이름을 RELEASE_ASSET 에 넣는다.
 #
@@ -723,6 +724,13 @@ if [ "$CHANNEL_SET" -eq 1 ] && [ "$SRC_COUNT" -gt 0 ]; then
 fi
 if [ -n "$SHA256" ] && [ "$SRC_KIND" != zip ]; then
   die "--sha256 은 --zip 과 함께만 쓸 수 있습니다"
+fi
+# 평문 http:// 로 받는 아카이브는 체크섬 없이는 받지 않는다 — 가는 길에서 바뀐 파일이 데몬으로 돌게 된다.
+# (https 는 경고만 한다: 사람이 고른 주소이고 전송 구간은 지켜진다. install.ps1 과 같은 규칙.)
+if [ "$SRC_KIND" = zip ] && [ -z "$SHA256" ]; then
+  case $ZIP_SRC in
+    http://*|HTTP://*) die "--zip 의 주소가 평문 http:// 입니다 — --sha256 <값|파일> 을 함께 주거나 https:// 주소를 쓰세요" ;;
+  esac
 fi
 if [ "$CRED_COUNT" -gt 1 ]; then
   usage >&2
