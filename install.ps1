@@ -8,7 +8,7 @@ Windows 의 수단(작업 스케줄러·ACL·ProgramData)으로 옮긴다. 규�
 
 사용법 (콘솔 위저드가 이 형태로 원라이너를 생성한다 — 인터페이스 동결):
   파이프 실행 (파일을 남기지 않는다 — 기본 권장. 관리자 권한 PowerShell 에서):
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/yskim-tscorp/clickeye-dist/main/install.ps1).TrimStart([char]0xFEFF))) `
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/AX-Tscorp/clickeye-dist/main/install.ps1).TrimStart([char]0xFEFF))) `
         -Project <이름> -CloudUrl wss://<host>/ws/daemon -Token <토큰>
   파일 실행 (폐쇄망·수동 반입):
     .\install.ps1 -Project <이름> -CloudUrl wss://<host>/ws/daemon -Token <토큰> `
@@ -17,6 +17,9 @@ Windows 의 수단(작업 스케줄러·ACL·ProgramData)으로 옮긴다. 규�
   (sh 와 나란히 두면:
      curl -fsSL .../install.sh | sudo sh -s -- --project <이름> --cloud-url ... --token ...
    ↔ & ([scriptblock]::Create((irm .../install.ps1).TrimStart([char]0xFEFF))) -Project <이름> -CloudUrl ... -Token ... )
+
+  **이 한 줄이 설치의 전부다.** 데몬이 쓰는 도구(Agent CLI·Node·git·gh)가 호스트에 없으면 스크립트가 데몬 전용
+  자리에 받아 놓고([W10]), 작업 스케줄러 등록·기동·응답 확인까지 한다. 자동으로 받지 않게 하려면 -NoToolInstall.
 
   **`.TrimStart([char]0xFEFF)` 를 빼면 안 된다.** 이 파일은 UTF-8 BOM 으로 저장돼 있어야
   하는데([W1]), PowerShell 5.1 의 Invoke-RestMethod 는 그 BOM 을 문자열 선두에 U+FEFF 로
@@ -46,6 +49,7 @@ Windows 의 수단(작업 스케줄러·ACL·ProgramData)으로 옮긴다. 규�
   C:\ProgramData\ClickEye\<project>\daemond.exe          바이너리
   C:\ProgramData\ClickEye\<project>\{data,workspaces}     데이터·작업공간
   C:\ProgramData\ClickEye\<project>\daemon-launcher.cmd   설정+기동 런처 (ACL 잠금 — 토큰이 들어간다)
+  C:\ProgramData\ClickEye\.tools\{npm,node,git,gh}        데몬 전용 도구 — 호스트에 없을 때만 생긴다 ([W10], 프로젝트 공용)
   작업 스케줄러  \ClickEye\clickeye-daemon-<project>      부팅 시 SYSTEM 으로 기동
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -114,10 +118,44 @@ Windows 고유 결정과 근거 (sh 와 갈리는 지점만)
      `$script:` 는 **스크립트블록이 아니라 호출자의 스코프**를 가리키므로, 파라미터를
      `$script:CloudUrl` 처럼 쓰면 파일 실행에서는 되고 파이프 실행에서는 값이 비는 버그가
      된다. 그래서 파라미터는 Invoke-Main 이 해시테이블 하나($cfg)로 정리해 **인자로**
-     내려보내고, 이 스크립트는 `$script:` 쓰기를 하지 않는다.
+     내려보내고, 이 스크립트는 `$script:` 를 **읽지도 쓰지도 않는다** — 쓰면 파이프 실행에서 운영자의 세션에
+     전역 변수로 남는다. 맨 위의 상수는 접두사 없이 두고(함수는 부른 쪽 스코프의 변수를 그대로 읽는다),
+     실행 중에 바뀌는 값(채널 등)은 $cfg 에 담는다.
      같은 이유로 실패 시 `exit` 를 무조건 부르지 않는다 — 스크립트블록 안의 `exit` 는
      운영자의 관리자 콘솔 자체를 닫아 버린다. 파일 실행일 때만 exit 하고, 파이프 실행에서는
      $LASTEXITCODE 만 세운다.
+
+[W10] 데몬 전용 도구 = C:\ProgramData\ClickEye\.tools. **sh 와 갈리는 지점이다** — sh 는 Agent CLI 와 Node 만
+     설치하고 git·gh 는 경고에 그치지만, Windows 서버에는 패키지 관리자가 없어 「보강하세요」가 곧 사람이
+     설치 파일을 찾아 받는 일이 된다. 그래서 없는 것은 스크립트가 받는다:
+       · Agent CLI — npm 으로 .tools\npm 에. Node — nodejs.org 의 zip 을 .tools\node 에.
+       · git — Git for Windows 의 PortableGit 을 .tools\git 에(Agent CLI 가 쓰는 bash 가 함께 온다).
+       · gh — GitHub CLI 의 zip 을 .tools\gh 에.
+     설치 프로그램(MSI)을 돌리지 않고 **풀어 놓기만** 한다 — 머신 PATH·레지스트리·이미 깔린 다른 판을 건드리지
+     않으므로 호스트의 다른 프로그램에 영향이 없고, 지우는 것도 폴더 하나다(마지막 프로젝트 철거 때 함께 지운다).
+     런처가 이 자리를 PATH 에 실어 데몬만 쓴다. 받은 파일은 SHA-256(배포처가 내는 값)과 Authenticode 서명을
+     확인한 뒤에만 놓는다.
+     **호스트에 이미 있는 도구를 먼저 쓴다** — 단 「관리자만 쓸 수 있는 자리」에 있을 때만이다([W11]). 사용자
+     프로필 안(%APPDATA%\npm, %USERPROFILE%\.local\bin 등)의 도구는 쓰지 않고 전용 사본을 놓는다.
+     한 번 놓은 사본은 재실행해도 다시 받지 않는다 — 올리려면 그 폴더(.tools\<이름>)를 지우고 다시 실행한다.
+
+[W11] 「관리자만 쓰는 자리」. 데몬은 SYSTEM 으로 돈다([W5]). 그러므로 **데몬이 실행하는 파일을 관리자가 아닌
+     계정이 바꿀 수 있으면 그 계정이 SYSTEM 이 된다.** 두 곳에서 지킨다:
+       · 설치 뿌리(C:\ProgramData\ClickEye)와 그 아래는 소유자를 Administrators 로 맞추고 상속을 끊어
+         SYSTEM + Administrators 만 남긴다. ProgramData 의 기본 권한은 일반 사용자가 하위 폴더에 **새 파일을
+         만들 수 있게** 하므로(BUILTIN\Users:(CI)(WD,AD)), 프로젝트 폴더만 잠그던 이전 판에서는 공용 도구
+         자리에 git.exe 를 넣어 두는 것으로 SYSTEM 실행을 얻을 수 있었다. 폴더가 이미 있으면 소유자를 먼저
+         본다 — 일반 사용자가 미리 만들어 둔 폴더는 잠근 뒤에도 그 소유자가 권한을 되찾을 수 있다(실측).
+       · 런처 PATH 에는 소유자와 쓰기 권한이 SYSTEM·Administrators·TrustedInstaller 뿐인 폴더만 싣는다
+         (Test-AdminOnlyPath). 설치한 계정의 프로필 폴더를 실으면 그 계정의 **승격하지 않은** 프로세스가
+         SYSTEM 이 될 수 있다.
+
+[W12] 비밀값의 흔적. 토큰·자격은 명령줄로 받는다(sh 와 같은 인터페이스). PowerShell 은 입력한 줄을 실행 **전에**
+     기록 파일(PSReadLine 의 ConsoleHost_history.txt)에 평문으로 적는다 — 기본 탑재판(2.0.0)에는 민감한 줄을
+     거르는 기능이 없다. 그래서 끝날 때 그 파일에서 비밀값이 든 줄을 지운다(Clear-SecretsFromHistory).
+     지우지 못하는 것: 그룹 정책으로 켠 스크립트 블록 로깅·트랜스크립트(이벤트 로그 4104 등)에 남은 사본.
+     런처에 적는 값은 큰따옴표·제어 문자·비 ASCII 를 거절한다(Assert-LauncherValue) — `set "K=V"` 안의
+     큰따옴표는 그 뒤를 명령으로 만든다.
 ──────────────────────────────────────────────────────────────────────────────
 #>
 
@@ -140,6 +178,8 @@ param(
     [string]$AnthropicKey,
     [string]$OauthToken,
     [string]$GhToken,
+    # 없는 도구(Agent CLI·Node·git·gh)를 받아 놓지 않는다 — 내려받기를 통제하는 환경용([W10]).
+    [switch]$NoToolInstall,
     [switch]$NoStart,
     [switch]$Uninstall,
     [switch]$PurgeData,
@@ -167,6 +207,37 @@ $PortSpan = 200
 $SidSystem = '*S-1-5-18'      # NT AUTHORITY\SYSTEM
 $SidAdmins = '*S-1-5-32-544'  # BUILTIN\Administrators
 
+# 「관리자만 쓰는 자리」의 기준 ([W11]) — 이 주체들만 소유하고 쓸 수 있는 경로를 믿는다.
+$TrustedSids = @(
+    'S-1-5-18',                                                          # SYSTEM
+    'S-1-5-32-544',                                                      # Administrators
+    'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'     # TrustedInstaller
+)
+# 파일·폴더를 바꿀 수 있게 하는 권한 비트: 쓰기(0x2)·추가(0x4)·하위 삭제(0x40)·삭제(0x10000)·권한 변경(0x40000)·
+# 소유권 가져오기(0x80000)·GENERIC_ALL(0x10000000)·GENERIC_WRITE(0x40000000). 속성 쓰기는 넣지 않는다(실행 내용을 못 바꾼다).
+$WriteRights = 0x2 -bor 0x4 -bor 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000 -bor 0x40000000
+
+# 데몬 전용 도구 자리 ([W10]). 이름이 '.' 으로 시작한다 — 프로젝트 이름은 '.' 으로 시작할 수 없으므로
+# (Assert-ValidProject) 어떤 프로젝트 디렉터리와도 겹치지 않는다.
+$ToolsDir     = Join-Path $BaseDir '.tools'
+# npm 전역 설치 자리. **사용자 프로필 안에 두면 안 된다** — 설치는 관리자 계정으로 하지만 데몬은 작업 스케줄러가
+# SYSTEM 으로 돌리므로 기본값(%APPDATA%\npm)에 깔면 데몬 쪽에서 보이지 않고, 보이게 하면 [W11] 을 어긴다.
+$NpmPrefix    = Join-Path $ToolsDir 'npm'
+# 이전 판이 npm 전역 설치에 쓰던 자리. 새 런처는 가리키지 않는다 — 남아 있으면 점검만 한다(Assert-LegacyToolDirClean).
+$LegacyNpmDir = Join-Path $BaseDir 'nodejs-global'
+
+$AgentPackage = '@anthropic-ai/claude-code'
+$NodeMin      = 22
+$NodeDist     = 'https://nodejs.org/dist/latest-v22.x'
+
+# 공개 배포 채널 — 소스 리포는 비공개이므로 배포 전용 공개 리포가 채널이다(ADR-0011). `latest` 를 쓰는 것은
+# 이 스크립트가 이미 멱등하게 「재실행 = 업그레이드」로 설계돼 있기 때문이다 — 특정 판에 고정해야 하는 납품은
+# 그 태그의 자산 URL 을 -Zip 으로 직접 주면 된다.
+$DistStableBase = 'https://github.com/AX-Tscorp/clickeye-dist/releases/latest/download'
+# edge 채널 — main 에 데몬 쪽 변경이 들어올 때마다 다시 만들어지는 사전 릴리스 하나(`edge`). 릴리스 전 판이라
+# 기본이 아니다: `-Channel edge` 를 준 설치(우리 검증 서버)만 받는다. `latest` 는 사전 릴리스를 가리키지 않는다.
+$DistEdgeBase   = 'https://github.com/AX-Tscorp/clickeye-dist/releases/download/edge'
+
 # ---------- 출력 ----------
 # sh 의 info/warn/die 와 같은 접두사를 쓴다. 두 스크립트의 로그를 같은 눈으로 읽게 하기 위함.
 function Write-Info {
@@ -191,7 +262,10 @@ function Show-Usage {
     $text = @'
 설치: .\install.ps1 -Project <이름> -CloudUrl wss://<host>/ws/daemon -Token <토큰> `
            [-Binary <경로> | -Zip <경로|URL> [-Sha256 <값|파일>] | -Git <repo-url> [-GitRef <ref>]] `
-           [-DaemonId <ID>] [-NoStart]
+           [-Channel <stable|edge>] [-DaemonId <ID>] `
+           [-AnthropicKey <값> | -OauthToken <값>] [-GhToken <값>] [-NoToolInstall] [-NoStart]
+
+  없는 도구(Agent CLI·Node·git·gh)는 데몬 전용 자리(C:\ProgramData\ClickEye\.tools)에 받아 놓습니다.
 
   -Project <이름>   필수. 이 호스트에서 데몬을 구분하는 식별자이자 경로·작업 이름.
                     허용 문자: A-Z a-z 0-9 . _ - (공백·슬래시·'..' 는 거부)
@@ -202,6 +276,7 @@ function Show-Usage {
                      공개 배포 채널 최신 릴리스를 받아 SHA256SUMS 로 검증 후 설치)
   -Zip <경로|URL>   압축 안의 daemond.exe 를 꺼내 설치 (.zip / .tar.gz)
   -Sha256 <값|파일> -Zip 아카이브의 SHA-256. 없으면 검증을 건너뛴다(경고).
+                    평문 http:// URL 은 이 값 없이는 받지 않는다.
   -Git <repo-url>   clone 후 go build (Go 툴체인 필요 / 비공개 리포는 자격증명 필요)
   -GitRef <ref>     -Git 과 함께 — 브랜치·태그·커밋
   -Channel <이름>   공개 배포 채널에서 받을 때의 채널 (기본: stable)
@@ -210,11 +285,13 @@ function Show-Usage {
   -DaemonId <ID>    데몬 식별자 (기본: <hostname>-<project>)
   -AnthropicKey <값>  AI CLI 자격 — 런처에 ANTHROPIC_API_KEY 로 기록 (Console 조직 키)
   -OauthToken <값>    AI CLI 자격 — 런처에 CLAUDE_CODE_OAUTH_TOKEN 로 기록
+                      (구독 토큰. 브라우저 있는 호스트에서 claude setup-token 으로 발급)
+                      위 둘은 배타이며 **선택**이다 — 없어도 설치는 되고 AI 스텝만 실패한다.
   -GhToken <값>       저장소 토큰 — 런처에 GH_TOKEN 로 기록 (clone·push·PR)
                       없으면 데몬은 뜨지만 잡이 **마지막 단계(PR 생성)에서** 실패합니다.
                       fine-grained PAT 권장: 대상 저장소 하나에 Contents RW + Pull requests RW.
-                      (구독 토큰. 브라우저 있는 호스트에서 claude setup-token 으로 발급)
-                      위 둘은 배타이며 **선택**이다 — 없어도 설치는 되고 AI 스텝만 실패한다.
+  -NoToolInstall    없는 도구를 받아 놓지 않는다 — 내려받기를 통제하는 환경용.
+                    Agent CLI 가 없으면 중단하고, git·gh·Node 가 없으면 경고만 한다.
   -NoStart          파일 배치까지만 — 작업 등록·기동 없음 (CI 검증용)
 
 철거: .\install.ps1 -Uninstall -Project <이름> [-PurgeData]
@@ -401,6 +478,9 @@ function Get-AllocatedPort {
 function Set-RestrictedAcl {
     param([string]$Path, [string]$System, [string]$Admins, [switch]$Container)
 
+    # 이 함수 안에서만 'Continue' — 5.1 은 'Stop' 아래에서 네이티브 명령의 stderr 를 `2>&1` 로 당기면 첫 줄에서
+    # 종료 오류를 던진다(실측). 그러면 아래의 종료코드 판정과 사유 문구까지 가지 못한다.
+    $ErrorActionPreference = 'Continue'
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
     $grantSystem = $System + ':(F)'
     $grantAdmins = $Admins + ':(F)'
@@ -419,6 +499,187 @@ function Set-RestrictedAcl {
     $out2 = & $icacls $Path '/grant:r' $grantSystem $grantAdmins 2>&1
     if ($LASTEXITCODE -ne 0) {
         Stop-Install ("ACL 설정 실패: {0}`n  {1}" -f $Path, ($out2 -join "`n  "))
+    }
+}
+
+# ---------- 「관리자만 쓰는 자리」 ([W11]) ----------
+function Get-OwnerSid {
+    param([string]$Path)
+    try {
+        return [string](Get-Acl -LiteralPath $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    } catch {
+        return ''
+    }
+}
+
+function Test-TrustedSid {
+    param([string]$Sid)
+    if ([string]::IsNullOrEmpty($Sid)) { return $false }
+    return ($TrustedSids -contains $Sid)
+}
+
+# 이 경로를 관리자가 아닌 주체가 바꿀 수 없는가 — 소유자와 허용 항목(ACE)을 본다. 읽지 못하면 믿지 않는다.
+#
+# 런처 PATH 에 실을 폴더와 그 안의 실행 파일에 쓴다. 소유자를 보는 이유: 소유자는 ACL 에 자기가 없어도 권한을
+# 고칠 수 있다. 상속 전용 항목도 센다 — 그 폴더 자체는 못 바꿔도 안의 파일을 바꿀 수 있다는 뜻이다.
+function Test-AdminOnlyPath {
+    param([string]$Path)
+    $acl = $null
+    try { $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop } catch { return $false }
+    $owner = ''
+    try { $owner = [string]$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value } catch { return $false }
+    if (-not (Test-TrustedSid $owner)) { return $false }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = [string]$rule.IdentityReference.Value
+        if (Test-TrustedSid $sid) { continue }
+        # CREATOR OWNER 는 「만든 주체」의 자리표시자다 — 만들 수 있는 주체가 따로 있어야 뜻이 생기고, 그 주체는 이 루프가 본다.
+        if ($sid -eq 'S-1-3-0') { continue }
+        if (([int]$rule.FileSystemRights -band $WriteRights) -ne 0) { return $false }
+    }
+    return $true
+}
+
+# 설치 뿌리 아래의 것이 「설치한 쪽」의 소유인가 — 믿는 주체이거나, 지금 이 설치를 돌리는 관리자 자신.
+# (Assert-Administrator 뒤에만 부른다 — 그 뒤의 현재 사용자는 승격된 관리자다.)
+function Test-InstallerOwned {
+    param([string]$Path)
+    $sid = Get-OwnerSid $Path
+    if (Test-TrustedSid $sid) { return $true }
+    if ([string]::IsNullOrEmpty($sid)) { return $false }
+    return ($sid -eq [string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+}
+
+function Test-ReparsePoint {
+    param([string]$Path)
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        return (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+    } catch {
+        return $false
+    }
+}
+
+# 설치가 쓰는 디렉터리 하나를 「관리자만 쓰는 자리」로 만든다(없으면 만든다).
+# 이미 있었고 잠겨 있지 않았으면(상속이 살아 있었으면) $true 를 돌려준다 — 그 사이에 누가 무엇을 넣었을 수 있다는 뜻이다.
+#
+# 이미 있는 폴더는 **잠그기 전에** 소유자를 본다. ProgramData 아래에는 일반 사용자도 폴더를 만들 수 있고, 만든
+# 사람은 소유자라 ACL 에서 빠진 뒤에도 권한을 되찾는다 — 설치 전에 폴더를 선점해 두면 이 잠금이 소용없어진다.
+# 정션·심볼릭 링크도 받지 않는다(잠금이 엉뚱한 자리에 걸리고, SYSTEM 이 그 너머에 쓰게 된다).
+function Initialize-SecureDirectory {
+    param([string]$Path, [string]$System, [string]$Admins)
+
+    $wasOpen = $false
+    if (Test-Path -LiteralPath $Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            Stop-Install ('{0} 이 폴더가 아닙니다 — 확인하고 치운 뒤 다시 실행하세요' -f $Path)
+        }
+        if (Test-ReparsePoint $Path) {
+            Stop-Install ('{0} 이 정션(또는 심볼릭 링크)입니다 — 설치 자리로 쓰지 않습니다. 누가 만들었는지 확인하고 지운 뒤 다시 실행하세요' -f $Path)
+        }
+        if (-not (Test-InstallerOwned $Path)) {
+            Stop-Install ("{0} 을 관리자가 아닌 계정이 만들어 두었습니다(소유자 SID: {1}).`n  데몬은 SYSTEM 으로 돌기 때문에 이 폴더를 그대로 쓰면 그 계정이 SYSTEM 권한을 얻을 수 있습니다.`n  안의 내용을 확인하고 폴더를 지운 뒤 다시 실행하세요." -f $Path, (Get-OwnerSid $Path))
+        }
+        try { $wasOpen = -not (Get-Acl -LiteralPath $Path -ErrorAction Stop).AreAccessRulesProtected } catch { $wasOpen = $true }
+    } else {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+
+    Set-AdminOwner -Path $Path -Admins $Admins
+    Set-RestrictedAcl -Path $Path -System $System -Admins $Admins -Container
+    return $wasOpen
+}
+
+# 소유자를 Administrators 로 맞춘다 — 설치한 관리자 개인이 소유자로 남으면 그 계정의 승격하지 않은 프로세스가 권한을 고칠 수 있다.
+function Set-AdminOwner {
+    param([string]$Path, [string]$Admins)
+    # 'Continue' 인 이유는 Set-RestrictedAcl 과 같다(네이티브 stderr).
+    $ErrorActionPreference = 'Continue'
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    $out = & $icacls $Path '/setowner' $Admins 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Install ("소유자 설정 실패: {0}`n  {1}" -f $Path, ($out -join "`n  "))
+    }
+}
+
+# 이전 판의 공용 도구 자리(nodejs-global)에 관리자가 아닌 계정이 넣은 것이 있는가.
+#
+# 이전 판은 이 폴더를 잠그지 않았고 런처 PATH 의 맨 앞에 실었다 — 그래서 여기에 넣어 둔 실행 파일은 SYSTEM 으로 돌았다.
+# 새 런처는 이 자리를 가리키지 않지만, 아직 다시 설치하지 않은 다른 프로젝트의 런처는 가리킨다. 뿌리를 잠근 지금부터는
+# 새로 넣을 수 없으므로, 그 전에 들어온 것만 한 번 본다.
+function Assert-LegacyToolDirClean {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return }
+    $bad = New-Object System.Collections.Generic.List[string]
+    foreach ($e in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue)) {
+        if (-not (Test-InstallerOwned $e.FullName)) {
+            $bad.Add($e.FullName)
+            if ($bad.Count -ge 5) { break }
+        }
+    }
+    if ($bad.Count -gt 0) {
+        Stop-Install ("{0} 에 관리자가 아닌 계정이 넣은 파일이 있습니다:`n  {1}`n  이전 판의 설치는 이 폴더를 잠그지 않았고 데몬(SYSTEM)이 여기서 도구를 찾았습니다 — 위 파일이 실행됐을 수 있습니다.`n  내용을 확인한 뒤 폴더를 지우고, 이 호스트의 프로젝트를 모두 다시 설치하세요." -f $Path, ($bad -join "`n  "))
+    }
+}
+
+# ---------- 입력값 검사 ([W12]) ----------
+# 런처(.cmd)에 `set "이름=값"` 으로 적히는 값. 큰따옴표는 그 따옴표를 닫아 뒤를 명령으로 만들고(SYSTEM 으로 돈다),
+# 줄바꿈은 줄을 하나 더 만든다. 런처는 ASCII 로 쓰므로 그 밖의 글자는 `?` 로 깨진다 — 조용히 깨뜨리지 않고 거절한다.
+# **값을 메시지에 싣지 않는다** — 토큰일 수 있다.
+function Assert-LauncherValue {
+    param([string]$Name, [string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return }
+    if ($Value.Contains('"')) {
+        Stop-Install ('{0} 값에 큰따옴표(")가 있습니다 — 런처에 적을 수 없는 글자입니다. 값을 다시 확인하세요(복사할 때 따옴표가 함께 들어오지 않았는지).' -f $Name)
+    }
+    if ($Value -match '[^\x20-\x7E]') {
+        Stop-Install ('{0} 값에 ASCII 가 아닌 글자나 제어 문자(줄바꿈 등)가 있습니다 — 런처에 적을 수 없습니다. 값을 다시 확인하세요.' -f $Name)
+    }
+}
+
+# 명령 기록 파일에서 비밀값이 든 줄을 지운다 ([W12]).
+#
+# PSReadLine 은 입력한 줄을 실행 전에 기록 파일에 적는다 — 이 함수가 도는 시점에는 설치 명령이 이미 거기 있다.
+# 값으로 찾아 지운다(플래그 이름으로 찾으면 다른 명령까지 지운다). 실패해도 설치 결과는 바꾸지 않는다.
+function Clear-SecretsFromHistory {
+    param([string[]]$Secrets, [string]$Path)
+
+    $vals = @($Secrets | Where-Object { (-not [string]::IsNullOrEmpty($_)) -and $_.Length -ge 8 })
+    if ($vals.Count -eq 0) { return }
+
+    $saveAtExit = $false
+    if ([string]::IsNullOrEmpty($Path)) {
+        try {
+            $opt = Get-PSReadLineOption -ErrorAction Stop
+            $Path = [string]$opt.HistorySavePath
+            $saveAtExit = ([string]$opt.HistorySaveStyle -eq 'SaveAtExit')
+        } catch {
+            $Path = ''
+        }
+        if ([string]::IsNullOrEmpty($Path) -and (-not [string]::IsNullOrEmpty($env:APPDATA))) {
+            $Path = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        }
+    }
+    try {
+        if ($saveAtExit) {
+            # 「끝낼 때 저장」이면 지금 파일에는 없고 세션을 닫을 때 적힌다 — 메모리의 기록을 비운다.
+            [Microsoft.PowerShell.PSConsoleReadLine]::ClearHistory()
+            Write-Info '이 창의 명령 기록을 비웠습니다 — 토큰이 든 설치 명령이 기록 파일에 남지 않게 하기 위해서입니다'
+        }
+        if ([string]::IsNullOrEmpty($Path) -or (-not (Test-Path -LiteralPath $Path -PathType Leaf))) { return }
+        $kept = New-Object System.Collections.Generic.List[string]
+        $removed = 0
+        foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+            $hit = $false
+            foreach ($v in $vals) { if ($line.Contains($v)) { $hit = $true; break } }
+            if ($hit) { $removed++ } else { $kept.Add($line) }
+        }
+        if ($removed -gt 0) {
+            [System.IO.File]::WriteAllLines($Path, $kept.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+            Write-Info ('명령 기록에서 토큰·자격이 든 줄 {0}개를 지웠습니다 ({1})' -f $removed, $Path)
+        }
+    } catch {
+        Write-Warn ('명령 기록을 정리하지 못했습니다 — 토큰이 든 설치 명령이 남아 있을 수 있습니다. 직접 지우세요: {0}' -f $Path)
     }
 }
 
@@ -447,14 +708,20 @@ function Assert-Checksum {
     Write-Info ('체크섬 검증 통과 (sha256={0})' -f $a)
 }
 
-function Save-Download {
-    param([string]$Url, [string]$OutFile)
+function Enable-Tls12 {
     # Server 2016 의 .NET 기본 프로토콜에는 TLS 1.2 가 빠져 있을 수 있다 — 명시적으로 켠다.
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch {
         Write-Warn 'TLS 1.2 활성화에 실패했습니다 — 다운로드가 거부되면 호스트의 .NET/Schannel 설정을 확인하세요'
     }
+}
+
+function Save-Download {
+    param([string]$Url, [string]$OutFile)
+    Enable-Tls12
+    # 진행 막대를 끈다 — 5.1 의 Invoke-WebRequest 는 막대를 그리느라 큰 파일을 몇 배 느리게 받는다.
+    $ProgressPreference = 'SilentlyContinue'
     try {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300
     } catch {
@@ -464,16 +731,7 @@ function Save-Download {
 }
 
 # ---------- 소스: 공개 배포 채널 (소스 옵션이 없을 때의 기본) ----------
-#
-# 소스 리포는 비공개이므로 배포 전용 공개 리포가 채널이다(ADR-0011). `latest` 를 쓰는 것은
-# 이 스크립트가 이미 멱등하게 "재실행 = 업그레이드"로 설계돼 있기 때문이다 — 특정 버전에
-# 고정해야 하는 납품은 그 태그의 자산 URL 을 -Zip 으로 직접 주면 된다.
-$script:DistReleaseBase = 'https://github.com/yskim-tscorp/clickeye-dist/releases/latest/download'
-# edge 채널 — main 에 데몬 쪽 변경이 들어올 때마다 다시 만들어지는 사전 릴리스 하나(`edge`). 릴리스 전 판이라
-# 기본이 아니다: `-Channel edge` 를 준 설치(우리 검증 서버)만 받는다. `latest` 는 사전 릴리스를 가리키지 않는다.
-$script:DistEdgeBase    = 'https://github.com/yskim-tscorp/clickeye-dist/releases/download/edge'
-$script:DistChannel     = 'stable'
-$script:DistChannelSet  = $false
+# 주소는 맨 위 상수($DistStableBase·$DistEdgeBase)에 있고, 이번 실행이 고른 것은 $Cfg.DistBase 다.
 
 function Get-ReleaseAssetName {
     # 배포 채널이 내는 Windows 자산은 amd64 하나뿐이다. arm64 Windows 에서도 amd64 실행
@@ -500,18 +758,18 @@ function Get-ChecksumFor {
 }
 
 function Get-ReleaseBinary {
-    param([string]$Destination, [string]$TempDir)
+    param([hashtable]$Cfg, [string]$Destination, [string]$TempDir)
 
     $asset = Get-ReleaseAssetName
-    if ($script:DistChannel -eq 'edge') {
+    if ($Cfg.DistChannel -eq 'edge') {
         Write-Info ('설치 소스: 공개 배포 채널 edge — main 의 최신 빌드, 릴리스 전 판입니다 ({0})' -f $asset)
     } else {
         Write-Info ('설치 소스: 공개 배포 채널 최신 릴리스 ({0})' -f $asset)
     }
-    Save-Download -Url ('{0}/{1}' -f $script:DistReleaseBase, $asset) -OutFile $Destination
+    Save-Download -Url ('{0}/{1}' -f $Cfg.DistBase, $asset) -OutFile $Destination
 
     $sums = Join-Path $TempDir 'SHA256SUMS'
-    Save-Download -Url ('{0}/SHA256SUMS' -f $script:DistReleaseBase) -OutFile $sums
+    Save-Download -Url ('{0}/SHA256SUMS' -f $Cfg.DistBase) -OutFile $sums
     $expect = Get-ChecksumFor -SumsFile $sums -AssetName $asset
     # 검증을 건너뛰지 않는다. -Zip 은 사람이 가져온 파일이라 경고 후 진행하지만, 이 경로는
     # 스크립트가 스스로 고른 URL 이므로 대조할 것이 없으면 그것 자체가 이상이다.
@@ -521,17 +779,11 @@ function Get-ReleaseBinary {
     Assert-Checksum -File $Destination -Expected $expect
 }
 
-# ---------- 전제: Agent CLI 자동 설치 ----------
+# ---------- 데몬이 쓰는 도구 ([W10]) ----------
 #
-# sh 와 같은 판단이다(install.sh 의 같은 절 참조): CLI 가 없으면 잡을 실행할 수단이 없고,
-# 설치 스크립트가 환경을 세워 주는 물건인데 이 하나만 사람에게 미루고 있었다.
-$script:AgentPackage = '@anthropic-ai/claude-code'
-$script:NodeMin      = 22
-$script:NodeDist     = 'https://nodejs.org/dist/latest-v22.x'
-# npm 전역 설치 자리. **사용자 프로필 안에 두면 안 된다** — 설치는 관리자 계정으로 하지만
-# 데몬은 작업 스케줄러가 SYSTEM 으로 돌리므로, 기본값(%APPDATA%\npm)에 깔면 데몬 쪽에서
-# 보이지 않는다. 그래서 프로필 밖 고정 경로에 깔고 런처 PATH 에 실어 준다.
-$script:NpmPrefix    = Join-Path $env:ProgramData 'ClickEye\nodejs-global'
+# 데몬은 Agent CLI·git·gh 를 프로세스로 띄운다. 호스트에 「관리자만 쓰는 자리」의 것이 있으면 그것을 쓰고([W11]),
+# 없으면 데몬 전용 자리($ToolsDir)에 받아 놓는다. sh 와 같은 판단에서 출발한다(install.sh 의 Agent CLI 절): CLI 가
+# 없으면 잡을 실행할 수단이 없고, 설치 스크립트가 환경을 세워 주는 물건인데 이것만 사람에게 미루고 있었다.
 
 # 실행 파일(.exe·.cmd·.bat)의 경로. 없으면 빈 문자열.
 #
@@ -550,120 +802,410 @@ function Get-NativeCommandPath {
     return ''
 }
 
-# 데몬이 부르는 도구(Agent CLI·node·git·gh)가 있는 폴더 — 런처의 PATH 뒤에 붙인다.
+# 같은 것 가운데 「관리자만 쓰는 자리」에 있는 첫 번째 ([W11]). 없으면 빈 문자열.
 #
-# 데몬은 SYSTEM 으로 돌고, SYSTEM 의 PATH 에는 설치한 관리자의 사용자 PATH(%APPDATA%\npm, %USERPROFILE%\.local\bin 등)가 없다.
-# 그래서 설치할 때 관리자에게 보이던 claude 를 데몬은 찾지 못했다 — 설치는 성공으로 끝나고 AI 스텝만 돌지 않았다.
-# 방금 설치한 Node·git 의 머신 PATH 도 재부팅 전에는 서비스에 닿지 않을 수 있어 같은 자리에서 함께 실어 준다.
-# **뒤에** 붙이는 이유: 빠진 것을 채우려는 것이지 호스트의 순서를 바꾸려는 것이 아니다.
-function Get-ToolDirectories {
-    $dirs = New-Object System.Collections.Generic.List[string]
-    foreach ($name in @('claude', 'codex', 'node', 'git', 'gh')) {
-        $src = Get-NativeCommandPath $name
+# 데몬은 SYSTEM 으로 돌고 이 경로의 폴더가 런처 PATH 에 실린다. 설치한 계정의 프로필(%APPDATA%\npm,
+# %USERPROFILE%\.local\bin …)처럼 승격 없이 쓸 수 있는 자리의 도구를 실으면 그 계정의 일반 프로세스가
+# 파일을 바꿔 SYSTEM 으로 실행시킬 수 있다 — 그래서 폴더와 파일 둘 다의 소유자·쓰기 권한을 본다.
+function Get-TrustedCommandPath {
+    param([string]$Name)
+    $native = @('.exe', '.cmd', '.bat', '.com')
+    foreach ($c in @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        $src = [string]$c.Source
         if ([string]::IsNullOrEmpty($src)) { continue }
+        if ($native -notcontains [System.IO.Path]::GetExtension($src).ToLowerInvariant()) { continue }
         $dir = Split-Path -Parent $src
         if ([string]::IsNullOrEmpty($dir)) { continue }
-        if ($dir -ieq $script:NpmPrefix) { continue }
-        if ($dir -match '[^\x20-\x7E]') {
-            # 런처는 ASCII 로 쓴다(Write-DaemonLauncher) — 그 밖의 글자는 깨진 경로가 된다.
-            Write-Warn ("{0} 가 ASCII 가 아닌 경로({1})에 있어 런처 PATH 에 싣지 못합니다 — 데몬(SYSTEM)이 찾지 못할 수 있습니다. 머신 자리에 다시 설치하세요." -f $name, $dir)
-            continue
-        }
-        $known = $false
-        foreach ($d in $dirs) { if ($d -ieq $dir) { $known = $true } }
-        if ($known) { continue }
-        if ((-not [string]::IsNullOrEmpty($env:USERPROFILE)) -and $dir.StartsWith($env:USERPROFILE, [System.StringComparison]::OrdinalIgnoreCase)) {
-            Write-Warn ("{0} 는 설치한 계정의 프로필 안({1})에 있습니다 — 런처 PATH 에 실어 데몬이 쓰게 합니다. 그 계정에서 지우거나 옮기면 데몬이 찾지 못합니다." -f $name, $dir)
-        }
-        $dirs.Add($dir)
+        if ((Test-AdminOnlyPath $dir) -and (Test-AdminOnlyPath $src)) { return $src }
     }
-    return $dirs.ToArray()
+    return ''
 }
 
 function Get-NodeMajor {
-    $cmd = Get-Command node -ErrorAction SilentlyContinue
-    if ($null -eq $cmd) { return $null }
-    $v = [string](& node -v 2>$null)
+    param([string]$Exe)
+    $v = ''
+    try { $v = [string](& $Exe -v 2>$null) } catch { return $null }
     $m = [regex]::Match($v, '^v?(\d+)')
     if (-not $m.Success) { return $null }
     return [int]$m.Groups[1].Value
 }
 
-function Install-NodeRuntime {
-    param([string]$TempDir)
-
-    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-        Stop-Install ("지원하지 않는 아키텍처라 Node 를 자동 설치할 수 없습니다: {0}`n  Node {1}+ 를 직접 설치한 뒤 다시 실행하세요." -f $env:PROCESSOR_ARCHITECTURE, $script:NodeMin)
+# git.exe 의 자리에서 그 설치의 bash.exe 를 찾는다(Git for Windows: <뿌리>\cmd\git.exe · <뿌리>\mingw64\bin\git.exe ↔ <뿌리>\bin\bash.exe).
+# Agent CLI 는 Windows 에서 이 bash 로 명령을 돌린다 — SYSTEM 계정에서도 찾도록 런처가 자리를 알려 준다.
+function Get-GitBashPath {
+    param([string]$GitExe)
+    $dir = Split-Path -Parent $GitExe
+    for ($i = 0; $i -lt 2; $i++) {
+        $dir = Split-Path -Parent $dir
+        if ([string]::IsNullOrEmpty($dir)) { break }
+        $bash = Join-Path $dir 'bin\bash.exe'
+        if (Test-Path -LiteralPath $bash -PathType Leaf) { return $bash }
     }
-    # 버전을 스크립트에 박지 않는다 — SHASUMS256.txt 한 장에서 파일 이름과 체크섬을 함께 얻는다.
+    return ''
+}
+
+# 받은 실행 파일의 Authenticode 서명이 유효한가.
+# 체크섬은 배포처가 낸 값과의 대조라 파일과 **같은 곳에서** 온다. 서명은 그 파일을 만든 쪽의 것이라 출처가 다르다 — 둘 다 본다.
+function Assert-SignedFile {
+    param([string]$File, [string]$Label)
+    $sig = Get-AuthenticodeSignature -LiteralPath $File
+    if ([string]$sig.Status -ne 'Valid') {
+        Stop-Install ('{0} 의 서명을 확인하지 못했습니다 (상태: {1}) — 놓지 않습니다' -f $Label, $sig.Status)
+    }
+    $who = ''
+    if ($null -ne $sig.SignerCertificate) { $who = [string]$sig.SignerCertificate.Subject }
+    Write-Info ('서명 확인 통과: {0} — {1}' -f $Label, $who)
+}
+
+# GitHub 의 최신 릴리스에서 이름이 맞는 자산 하나 — 주소와 SHA-256(GitHub 가 자산마다 내는 digest).
+function Get-GitHubLatestAsset {
+    param([string]$Repo, [string]$Pattern)
+    Enable-Tls12
+    # GitHub API 는 로그인 없이 IP 하나에 시간당 60회다. 여러 호스트가 한 IP 로 나가는 곳(CI 러너·사내 NAT)에서는 걸릴 수
+    # 있어 토큰을 받을 길을 둔다 — CLICKEYE_GITHUB_API_TOKEN (권한 없는 토큰이면 된다. 런처에는 적지 않는다).
+    $headers = @{}
+    if (-not [string]::IsNullOrEmpty($env:CLICKEYE_GITHUB_API_TOKEN)) {
+        $headers['Authorization'] = 'Bearer ' + $env:CLICKEYE_GITHUB_API_TOKEN
+    }
+    $rel = $null
+    try {
+        $rel = Invoke-RestMethod -Uri ('https://api.github.com/repos/{0}/releases/latest' -f $Repo) -Headers $headers -UseBasicParsing -TimeoutSec 60
+    } catch {
+        Stop-Install ("릴리스 정보를 받지 못했습니다: {0}`n  {1}" -f $Repo, $_.Exception.Message)
+    }
+    foreach ($a in @($rel.assets)) {
+        if ([string]$a.name -notmatch $Pattern) { continue }
+        $digest = ''
+        if ($null -ne $a.PSObject.Properties['digest']) { $digest = ([string]$a.digest) -replace '^sha256:', '' }
+        # 검증을 건너뛰지 않는다 — 스크립트가 스스로 고른 주소라 대조할 값이 없으면 그것 자체가 이상이다(Get-ReleaseBinary 와 같은 판단).
+        if ([string]::IsNullOrEmpty($digest)) {
+            Stop-Install ('{0} 의 체크섬을 배포처에서 받지 못했습니다 — 놓지 않습니다' -f [string]$a.name)
+        }
+        return @{ Name = [string]$a.name; Url = [string]$a.browser_download_url; Sha256 = $digest }
+    }
+    Stop-Install ('{0} 의 최신 릴리스에 맞는 파일이 없습니다 (찾은 이름 꼴: {1})' -f $Repo, $Pattern)
+}
+
+function Expand-ZipArchive {
+    param([string]$Zip, [string]$Destination)
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    # tar.exe(Windows 10 1803 / Server 2019 이상)가 zip 을 훨씬 빨리 푼다 — 파일이 수천 개인 Node 에서 차이가 크다.
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (Test-Path -LiteralPath $tar -PathType Leaf) {
+        & $tar -xf $Zip -C $Destination
+        if ($LASTEXITCODE -eq 0) { return }
+    }
+    try {
+        Expand-Archive -LiteralPath $Zip -DestinationPath $Destination -Force
+    } catch {
+        Stop-Install ("압축 해제 실패: {0}`n  {1}" -f $Zip, $_.Exception.Message)
+    }
+}
+
+# 풀어 둔 폴더($Stage)를 확인한 뒤 $Target 으로 옮긴다. 폴더 안이 폴더 하나뿐이면(node-v22…-win-x64\) 그 폴더가 뿌리다.
+#
+# 호출자는 $Target 옆(`.new`)에 푼다 — 같은 볼륨이라 옮기기가 이름 바꾸기이고, 잠긴 도구 자리 안이라 풀린 파일이 처음부터
+# 관리자만 쓰는 권한을 물려받는다. 확인 전에는 $Target 이 생기지 않으므로 풀다 끊긴 것이 「설치됨」으로 읽히지 않는다.
+function Move-StagedTool {
+    param([string]$Stage, [string]$Target, [string]$SignedExe, [string]$Label)
+    try {
+        $root = $Stage
+        $kids = @(Get-ChildItem -LiteralPath $Stage -Force)
+        if ($kids.Count -eq 1 -and $kids[0].PSIsContainer) { $root = $kids[0].FullName }
+        $exe = Join-Path $root $SignedExe
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            Stop-Install ('{0}: 풀어 놓은 것에 {1} 이 없습니다' -f $Label, $SignedExe)
+        }
+        Assert-SignedFile -File $exe -Label $Label
+        if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Recurse -Force }
+        Move-Item -LiteralPath $root -Destination $Target
+    } finally {
+        if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Assert-ToolArch {
+    param([string]$Label)
+    # 받아 놓는 것은 전부 x64 판이다. arm64 Windows 에서도 에뮬레이션으로 돌기는 하지만 조용히 놓지 않는다(Get-ReleaseAssetName 과 같은 판단).
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+        Stop-Install ('지원하지 않는 아키텍처({0})라 {1} 을(를) 받아 놓을 수 없습니다 — 머신 자리에 직접 설치한 뒤 다시 실행하세요' -f $env:PROCESSOR_ARCHITECTURE, $Label)
+    }
+}
+
+function Install-PrivateNode {
+    param([string]$Target, [string]$TempDir)
+    Assert-ToolArch 'Node.js'
+    # 판을 스크립트에 박지 않는다 — SHASUMS256.txt 한 장에서 파일 이름과 체크섬을 함께 얻는다.
     $sums = Join-Path $TempDir 'node-SHASUMS256.txt'
-    Save-Download -Url ('{0}/SHASUMS256.txt' -f $script:NodeDist) -OutFile $sums
+    Save-Download -Url ('{0}/SHASUMS256.txt' -f $NodeDist) -OutFile $sums
     $file = ''
     $hash = ''
     foreach ($line in Get-Content -LiteralPath $sums) {
         $parts = $line -split '\s+'
         if ($parts.Count -lt 2) { continue }
         $n = $parts[1] -replace '^\*', ''
-        if ($n -match '^node-v22\..*-x64\.msi$') { $file = $n; $hash = $parts[0]; break }
+        if ($n -match '^node-v22\..*-win-x64\.zip$') { $file = $n; $hash = $parts[0]; break }
     }
     if ([string]::IsNullOrEmpty($file)) {
-        Stop-Install ('Node 배포 목록에서 x64 msi 를 찾지 못했습니다 — {0}/SHASUMS256.txt 를 확인하세요' -f $script:NodeDist)
+        Stop-Install ('Node 배포 목록에서 x64 zip 을 찾지 못했습니다 — {0}/SHASUMS256.txt 를 확인하세요' -f $NodeDist)
     }
-
-    $msi = Join-Path $TempDir $file
-    Write-Info ('Node.js 설치: {0}' -f $file)
-    Save-Download -Url ('{0}/{1}' -f $script:NodeDist, $file) -OutFile $msi
-    Assert-Checksum -File $msi -Expected $hash
-
-    $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"{0}"' -f $msi), '/qn', '/norestart') -Wait -PassThru
-    if ($p.ExitCode -ne 0) {
-        Stop-Install ('Node.js 설치 실패 (msiexec 종료코드 {0}) — 이벤트 로그의 MsiInstaller 항목을 확인하세요' -f $p.ExitCode)
-    }
-    # 방금 설치한 것은 **이 프로세스의 PATH 에 없다.** MSI 가 갱신하는 것은 머신 PATH 이고
-    # 이미 뜬 프로세스에는 반영되지 않는다 — 다시 읽어 붙이지 않으면 바로 아래에서 npm 을 못 찾는다.
-    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    if (-not [string]::IsNullOrEmpty($machine)) { $env:Path = $machine + ';' + $env:Path }
-    Write-Info ('Node.js 설치 완료: {0}' -f [string](& node -v 2>$null))
+    Write-Info ('Node.js 를 데몬 전용 자리에 받습니다: {0}' -f $file)
+    $zip = Join-Path $TempDir $file
+    Save-Download -Url ('{0}/{1}' -f $NodeDist, $file) -OutFile $zip
+    Assert-Checksum -File $zip -Expected $hash
+    $stage = $Target + '.new'
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    Expand-ZipArchive -Zip $zip -Destination $stage
+    Move-StagedTool -Stage $stage -Target $Target -SignedExe 'node.exe' -Label 'Node.js'
+    Write-Info ('Node.js 준비 완료: {0}' -f $Target)
 }
 
+function Install-PrivateGit {
+    param([string]$Target, [string]$TempDir)
+    Assert-ToolArch 'git'
+    # PortableGit — Git for Windows 를 설치 프로그램 없이 푸는 판. Agent CLI 가 Windows 에서 명령을 돌리는 bash 가 함께 온다
+    # (MinGit 에는 그 도구들이 없다).
+    $asset = Get-GitHubLatestAsset -Repo 'git-for-windows/git' -Pattern '^PortableGit-[0-9.]+-64-bit\.7z\.exe$'
+    Write-Info ('git 을 데몬 전용 자리에 받습니다: {0}' -f $asset.Name)
+    $sfx = Join-Path $TempDir $asset.Name
+    Save-Download -Url $asset.Url -OutFile $sfx
+    Assert-Checksum -File $sfx -Expected $asset.Sha256
+    Assert-SignedFile -File $sfx -Label $asset.Name
+    $stage = $Target + '.new'
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    # 자동 풀림 파일(7z SFX)이다: -y 로 묻지 않고 -o 로 자리를 준다. 풀고 나면 안의 post-install 이 한 번 돈다.
+    $p = Start-Process -FilePath $sfx -ArgumentList @('-y', ('-o"{0}"' -f $stage)) -Wait -PassThru -WindowStyle Hidden
+    if ($p.ExitCode -ne 0) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        Stop-Install ('git 을 풀지 못했습니다 (종료코드 {0})' -f $p.ExitCode)
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stage 'bin\bash.exe') -PathType Leaf)) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        Stop-Install 'git 을 풀었지만 bin\bash.exe 가 없습니다 — 받은 파일이 PortableGit 이 아닙니다'
+    }
+    Move-StagedTool -Stage $stage -Target $Target -SignedExe 'cmd\git.exe' -Label 'git'
+    Write-Info ('git 준비 완료: {0}' -f $Target)
+}
+
+function Install-PrivateGh {
+    param([string]$Target, [string]$TempDir)
+    Assert-ToolArch 'gh'
+    $asset = Get-GitHubLatestAsset -Repo 'cli/cli' -Pattern '^gh_[0-9.]+_windows_amd64\.zip$'
+    Write-Info ('gh(GitHub CLI)를 데몬 전용 자리에 받습니다: {0}' -f $asset.Name)
+    $zip = Join-Path $TempDir $asset.Name
+    Save-Download -Url $asset.Url -OutFile $zip
+    Assert-Checksum -File $zip -Expected $asset.Sha256
+    $stage = $Target + '.new'
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    Expand-ZipArchive -Zip $zip -Destination $stage
+    Move-StagedTool -Stage $stage -Target $Target -SignedExe 'bin\gh.exe' -Label 'gh'
+    Write-Info ('gh 준비 완료: {0}' -f $Target)
+}
+
+# Agent CLI 를 데몬 전용 npm 자리($NpmPrefix)에 설치한다. $NodeDir 의 npm 을 쓴다.
 function Install-AgentCli {
-    param([string]$TempDir)
+    param([string]$NodeDir, [string]$TempDir)
 
-    $major = Get-NodeMajor
-    if ($null -eq $major) {
-        Install-NodeRuntime -TempDir $TempDir
-    } elseif ($major -lt $script:NodeMin) {
-        # 이미 있는 Node 를 갈아치우지 않는다 — 이 호스트의 다른 프로그램이 그 버전에 매여
-        # 있을 수 있고, 설치 스크립트가 조용히 바꿔 놓으면 그쪽이 깨진 이유를 여기서 찾을 수 없다.
-        Stop-Install ("Node.js {0} 가 설치돼 있지만 Agent CLI 는 {1} 이상이 필요합니다.`n  이 스크립트는 이미 있는 Node 를 교체하지 않습니다 — 이 호스트의 다른 프로그램이 그 버전에`n  매여 있을 수 있습니다. Node 를 올린 뒤 다시 실행하거나, CLI 를 먼저 설치하세요:`n    npm install -g {2}" -f $major, $script:NodeMin, $script:AgentPackage)
+    # npm.cmd 를 직접 가리킨다 — `Get-Command npm` 은 npm.ps1 을 먼저 돌려주고, 그것은 아래의 cmd.exe 로 실행되지 않는다.
+    $npm = Join-Path $NodeDir 'npm.cmd'
+    if (-not (Test-Path -LiteralPath $npm -PathType Leaf)) {
+        Stop-Install ('npm 을 찾을 수 없습니다 — Node 설치가 온전하지 않습니다: {0}' -f $NodeDir)
     }
 
-    # npm.cmd 를 고른다 — `Get-Command npm` 은 npm.ps1 을 먼저 돌려주고, 그것은 아래의 cmd.exe 로 실행되지 않는다.
-    $npm = Get-NativeCommandPath 'npm'
-    if ([string]::IsNullOrEmpty($npm)) {
-        $cand = Join-Path $env:ProgramFiles 'nodejs\npm.cmd'
-        if (Test-Path -LiteralPath $cand -PathType Leaf) { $npm = $cand }
-    }
-    if ([string]::IsNullOrEmpty($npm)) { Stop-Install 'npm 을 찾을 수 없습니다 — Node 설치가 온전하지 않습니다' }
-
-    New-Item -ItemType Directory -Path $script:NpmPrefix -Force | Out-Null
-    Write-Info ('Agent CLI 설치: npm install -g {0}' -f $script:AgentPackage)
+    New-Item -ItemType Directory -Path $NpmPrefix -Force | Out-Null
+    Write-Info ('Agent CLI 설치: npm install -g {0}' -f $AgentPackage)
     $log = Join-Path $TempDir 'npm.log'
-    # npm 은 배치 파일이라 cmd 를 거친다. 출력은 파일로 받는다 — 5.1 에서 네이티브 stderr 를
-    # 파이프로 당기면 ErrorRecord 로 감싸여 종료코드 판정이 어긋난다.
-    & cmd.exe /c "`"$npm`" install -g --prefix `"$($script:NpmPrefix)`" $($script:AgentPackage) > `"$log`" 2>&1"
-    if ($LASTEXITCODE -ne 0) {
+    # npm 이 띄우는 설치 스크립트가 같은 Node 를 찾도록 이 프로세스의 PATH 앞에 잠깐 싣는다.
+    $oldPath = $env:Path
+    $code = 1
+    try {
+        $env:Path = $NodeDir + ';' + $env:Path
+        # npm 은 배치 파일이라 cmd 를 거친다. 출력은 파일로 받는다 — 5.1 에서 네이티브 stderr 를
+        # 파이프로 당기면 ErrorRecord 로 감싸여 종료코드 판정이 어긋난다.
+        & cmd.exe /c "`"$npm`" install -g --prefix `"$NpmPrefix`" $AgentPackage > `"$log`" 2>&1"
+        $code = $LASTEXITCODE
+    } finally {
+        $env:Path = $oldPath
+    }
+    if ($code -ne 0) {
         if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 20 | ForEach-Object { Write-Warn $_ } }
         Stop-Install 'Agent CLI 설치 실패 — 위 npm 출력을 확인하세요'
     }
-    # 런처가 PATH 에 실어 주지만, 이 프로세스의 연결 확인도 찾아야 하므로 지금 붙여 둔다.
-    $env:Path = $script:NpmPrefix + ';' + $env:Path
-    # claude.cmd 를 고른다 — claude.ps1 은 실행 정책(Windows 기본값 Restricted)에 막힌다.
-    $claude = Get-NativeCommandPath 'claude'
-    if ([string]::IsNullOrEmpty($claude)) {
-        Stop-Install ('설치는 끝났는데 claude 를 찾을 수 없습니다 — {0} 를 확인하세요' -f $script:NpmPrefix)
+    # claude.cmd 를 본다 — claude.ps1 은 실행 정책(Windows 기본값 Restricted)에 막히고 데몬도 띄우지 못한다.
+    $claude = Join-Path $NpmPrefix 'claude.cmd'
+    if (-not (Test-Path -LiteralPath $claude -PathType Leaf)) {
+        Stop-Install ('설치는 끝났는데 claude 를 찾을 수 없습니다 — {0} 를 확인하세요' -f $NpmPrefix)
     }
     Write-Info ('Agent CLI 설치 완료: {0}' -f [string](& $claude --version 2>$null))
+}
+
+# 런처 PATH 에 실을 폴더를 목록에 더한다(겹치면 건너뛴다).
+function Add-PathDir {
+    param([System.Collections.Generic.List[string]]$List, [string]$Dir, [string]$Label)
+    if ([string]::IsNullOrEmpty($Dir)) { return }
+    if (($Dir -match '[^\x20-\x7E]') -or $Dir.Contains(';')) {
+        # 런처는 ASCII 로 쓴다(Write-DaemonLauncher) — 그 밖의 글자는 깨진 경로가 되고, `;` 는 PATH 를 둘로 쪼갠다.
+        Write-Warn ('{0} 의 자리({1})에 런처 PATH 에 적을 수 없는 글자가 있어 싣지 못합니다 — 데몬(SYSTEM)이 찾지 못할 수 있습니다' -f $Label, $Dir)
+        return
+    }
+    foreach ($d in $List) { if ($d -ieq $Dir) { return } }
+    $List.Add($Dir)
+}
+
+function Get-InnerMessage {
+    param($ErrorRecord)
+    return ([string]$ErrorRecord.Exception.Message) -replace '^\[install\] 오류: ', ''
+}
+
+# 데몬이 쓸 도구를 정한다 — 없는 것은 받아 놓고, 런처에 실을 PATH 와 값을 돌려준다.
+#
+# 순서: 호스트의 「관리자만 쓰는 자리」에 있는 것 → 이미 받아 둔 전용 사본 → 새로 받는다.
+# Agent CLI 가 끝내 없으면 중단한다(잡을 실행할 수단이 없다). git·gh·Node 는 경고로 낮춘다 — 무엇이 빠졌는지는
+# 데몬이 접속할 때 관제로 올려(daemon.hello.env) 콘솔이 한자리에서 보여 준다.
+#
+# Prepend 는 `%PATH%` 앞에, Append 는 뒤에 붙는다. 전용 사본은 앞에 둔다 — 그 도구가 호스트에 없거나 믿지 못할
+# 자리에만 있을 때만 생기므로, 앞에 두어야 그것이 쓰인다. 호스트의 것은 뒤에 둔다 — 머신 PATH 가 아직 서비스에
+# 닿지 않았을 때를 메우려는 것이지 호스트의 순서를 바꾸려는 것이 아니다.
+function Resolve-Toolchain {
+    param([hashtable]$Cfg)
+
+    $prepend = New-Object System.Collections.Generic.List[string]
+    $append  = New-Object System.Collections.Generic.List[string]
+    $result  = @{ Claude = ''; GitBash = ''; AgentClis = @(); NodeDesc = 'none'; Prepend = $prepend; Append = $append }
+    $auto    = (-not $Cfg.NoToolInstall)
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('clickeye-tools-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    try {
+        $privNodeDir = Join-Path $ToolsDir 'node'
+        $privNode    = Join-Path $privNodeDir 'node.exe'
+        $hostNode    = Get-TrustedCommandPath 'node'
+        $hostMajor   = $null
+        if (-not [string]::IsNullOrEmpty($hostNode)) { $hostMajor = Get-NodeMajor $hostNode }
+
+        # ---- Agent CLI — claude 또는 codex 중 최소 하나 ----
+        $privClaude = Join-Path $NpmPrefix 'claude.cmd'
+        $hostClaude = Get-TrustedCommandPath 'claude'
+        $hostCodex  = Get-TrustedCommandPath 'codex'
+        $clis = @()
+        if (Test-Path -LiteralPath $privClaude -PathType Leaf) {
+            $result.Claude = $privClaude
+            $clis += 'claude'
+        } elseif (-not [string]::IsNullOrEmpty($hostClaude)) {
+            $result.Claude = $hostClaude
+            $clis += 'claude'
+            Add-PathDir $append (Split-Path -Parent $hostClaude) 'claude'
+        }
+        if (-not [string]::IsNullOrEmpty($hostCodex)) {
+            $clis += 'codex'
+            Add-PathDir $append (Split-Path -Parent $hostCodex) 'codex'
+        }
+        if ($clis.Count -eq 0) {
+            $anyClaude = Get-NativeCommandPath 'claude'
+            if ([string]::IsNullOrEmpty($anyClaude)) {
+                Write-Info 'Agent CLI 가 없습니다 — 설치합니다 (claude)'
+            } else {
+                Write-Info ('claude 가 {0} 에 있지만 관리자가 아닌 계정이 바꿀 수 있는 자리입니다 — 데몬(SYSTEM)은 그것을 쓰지 않고 전용 사본을 설치합니다' -f (Split-Path -Parent $anyClaude))
+            }
+            if (-not $auto) {
+                Stop-Install 'Agent CLI(claude 또는 codex)가 머신 자리에 없습니다 — -NoToolInstall 이라 받아 놓지 않았습니다. 관리자만 쓸 수 있는 자리에 먼저 설치하거나 -NoToolInstall 을 빼고 다시 실행하세요'
+            }
+            # npm 을 돌릴 Node — 호스트의 것이 충분히 새것이면 그것, 아니면 전용 사본. 호스트의 Node 는 갈아치우지 않는다:
+            # 이 호스트의 다른 프로그램이 그 판에 매여 있을 수 있다.
+            $npmNodeDir = $privNodeDir
+            if ((-not [string]::IsNullOrEmpty($hostNode)) -and ($null -ne $hostMajor) -and ($hostMajor -ge $NodeMin)) {
+                $npmNodeDir = Split-Path -Parent $hostNode
+            } elseif (-not (Test-Path -LiteralPath $privNode -PathType Leaf)) {
+                Install-PrivateNode -Target $privNodeDir -TempDir $tmp
+            }
+            Install-AgentCli -NodeDir $npmNodeDir -TempDir $tmp
+            $result.Claude = $privClaude
+            $clis += 'claude'
+        }
+        $result.AgentClis = $clis
+        if (Test-Path -LiteralPath $NpmPrefix -PathType Container) { Add-PathDir $prepend $NpmPrefix 'npm' }
+
+        # ---- Node (잡이 쓰는 런타임) ----
+        if (-not [string]::IsNullOrEmpty($hostNode)) {
+            # 호스트에 있으면 그것이 잡의 Node 다 — 전용 사본을 받아 두었더라도(npm 용) PATH 에 싣지 않는다.
+            $result.NodeDesc = [string](& $hostNode -v 2>$null)
+            Add-PathDir $append (Split-Path -Parent $hostNode) 'node'
+            if (($null -ne $hostMajor) -and ($hostMajor -lt $NodeMin)) {
+                Write-Warn ('Node.js {0} 이상을 권장합니다 (현재: {1}) — 설치는 계속합니다' -f $NodeMin, $result.NodeDesc)
+            }
+        } else {
+            if ((-not (Test-Path -LiteralPath $privNode -PathType Leaf)) -and $auto) {
+                try {
+                    Install-PrivateNode -Target $privNodeDir -TempDir $tmp
+                } catch {
+                    Write-Warn ('Node.js 를 받아 놓지 못했습니다 — 설치는 계속합니다: {0}' -f (Get-InnerMessage $_))
+                }
+            }
+            if (Test-Path -LiteralPath $privNode -PathType Leaf) {
+                $result.NodeDesc = ([string](& $privNode -v 2>$null)) + ' (전용)'
+                Add-PathDir $prepend $privNodeDir 'node'
+            } else {
+                Write-Warn 'Node.js 가 없습니다 — Node 로 빌드·검증하는 프로젝트의 잡이 실패합니다. 설치를 계속하되 보강하세요'
+                Write-Warn '  (부재 사실은 데몬이 접속 시 관제 콘솔에 환경 리포트로 올립니다)'
+            }
+        }
+
+        # ---- git ----
+        $privGitDir = Join-Path $ToolsDir 'git'
+        $privGit    = Join-Path $privGitDir 'cmd\git.exe'
+        $hostGit    = Get-TrustedCommandPath 'git'
+        if (-not [string]::IsNullOrEmpty($hostGit)) {
+            Add-PathDir $append (Split-Path -Parent $hostGit) 'git'
+            $bash = Get-GitBashPath $hostGit
+            if ((-not [string]::IsNullOrEmpty($bash)) -and (Test-AdminOnlyPath $bash)) { $result.GitBash = $bash }
+        } else {
+            if ((-not (Test-Path -LiteralPath $privGit -PathType Leaf)) -and $auto) {
+                $anyGit = Get-NativeCommandPath 'git'
+                if (-not [string]::IsNullOrEmpty($anyGit)) {
+                    Write-Info ('git 이 {0} 에 있지만 관리자가 아닌 계정이 바꿀 수 있는 자리입니다 — 데몬은 전용 사본을 씁니다' -f (Split-Path -Parent $anyGit))
+                }
+                try {
+                    Install-PrivateGit -Target $privGitDir -TempDir $tmp
+                } catch {
+                    Write-Warn ('git 을 받아 놓지 못했습니다 — 설치는 계속합니다: {0}' -f (Get-InnerMessage $_))
+                }
+            }
+            if (Test-Path -LiteralPath $privGit -PathType Leaf) {
+                Add-PathDir $prepend (Join-Path $privGitDir 'cmd') 'git'
+                $result.GitBash = Join-Path $privGitDir 'bin\bash.exe'
+            } else {
+                Write-Warn 'git 이 없습니다 — 잡 작업공간 provisioning 이 실패합니다. 설치를 계속하되 보강하세요 (Git for Windows 를 「모든 사용자」로 설치)'
+                Write-Warn '  (부재 사실은 데몬이 접속 시 관제 콘솔에 환경 리포트로 올립니다)'
+            }
+        }
+
+        # ---- gh ----
+        # 작업의 결과(PR)를 만들고 콘솔 머지를 집행하는 도구다. clone·push 는 gh 없이도 저장소 토큰으로 되지만(데몬이 git 에
+        # 직접 잇는다), PR 생성은 gh 뿐이다 — 없으면 작업이 AI 단계를 다 돌린 뒤 맨 끝에서 실패한다. 로컬 저장소 모드만 쓰면 필요 없다.
+        $privGhDir = Join-Path $ToolsDir 'gh'
+        $privGh    = Join-Path $privGhDir 'bin\gh.exe'
+        $hostGh    = Get-TrustedCommandPath 'gh'
+        if (-not [string]::IsNullOrEmpty($hostGh)) {
+            Add-PathDir $append (Split-Path -Parent $hostGh) 'gh'
+        } else {
+            if ((-not (Test-Path -LiteralPath $privGh -PathType Leaf)) -and $auto) {
+                try {
+                    Install-PrivateGh -Target $privGhDir -TempDir $tmp
+                } catch {
+                    Write-Warn ('gh 를 받아 놓지 못했습니다 — 설치는 계속합니다: {0}' -f (Get-InnerMessage $_))
+                }
+            }
+            if (Test-Path -LiteralPath $privGh -PathType Leaf) {
+                Add-PathDir $prepend (Join-Path $privGhDir 'bin') 'gh'
+            } else {
+                Write-Warn 'gh(GitHub CLI)가 없습니다 — 작업이 맨 끝(PR 생성)에서 실패하고 콘솔 머지도 되지 않습니다. 설치를 계속하되 보강하세요'
+                Write-Warn '  (설치한 뒤 같은 명령을 다시 실행하면 런처 PATH 에 실립니다 — 부재 사실은 콘솔 데몬 카드의 「저장소 쓰기」에도 보입니다)'
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $result
 }
 
 # ---------- 소스: 아카이브에서 daemond.exe 꺼내기 ----------
@@ -705,6 +1247,11 @@ function Expand-DaemonArchive {
 # ---------- 소스: git clone + go build ----------
 function Build-FromGit {
     param([string]$RepoUrl, [string]$Ref, [string]$Destination, [string]$TempDir)
+
+    # 이 함수 안에서만 'Continue'. git 은 진행 상황을 stderr 로 쓰고, 5.1 은 'Stop' 아래에서 `2>&1` 로 당긴 첫 줄
+    # (「Cloning into …」)에 종료 오류를 던진다 — 그래서 이 경로는 clone 이 성공해도 늘 실패했다(실측). 실패 판정은
+    # 종료코드로 하고, 중단은 Stop-Install(throw)이 그대로 한다.
+    $ErrorActionPreference = 'Continue'
 
     if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
         Stop-Install 'git 이 없습니다 — -Git 은 소스를 clone 해 빌드하는 경로입니다. 먼저 설치하세요 (winget install Git.Git)'
@@ -916,7 +1463,8 @@ function Invoke-Uninstall {
         Write-Warn ("프로젝트 '{0}' 의 설치 흔적을 찾지 못했습니다 — 이미 철거되었거나 이름이 다를 수 있습니다" -f $Cfg.Project)
         $names = @()
         if (Test-Path -LiteralPath $Cfg.BaseDir) {
-            $names = @(Get-ChildItem -LiteralPath $Cfg.BaseDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            $names = @(Get-ChildItem -LiteralPath $Cfg.BaseDir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { ($_.FullName -ine $ToolsDir) -and ($_.FullName -ine $LegacyNpmDir) } | ForEach-Object { $_.Name })
         }
         if ($names.Count -eq 0) {
             Write-Warn '설치된 프로젝트 목록: (없음)'
@@ -929,13 +1477,26 @@ function Invoke-Uninstall {
     #    Windows 에는 sh 의 템플릿 유닛·시스템 사용자에 해당하는 공유물이 없다(작업이
     #    프로젝트별로 완결되고, 실행 계정은 이미 존재하는 SYSTEM 이다). 남는 공용물은
     #    뿌리 디렉터리와 작업 폴더뿐이라 둘 다 비었을 때만 치운다.
+    #    공용 도구 자리(.tools, 이전 판의 nodejs-global)는 프로젝트가 아니므로 세지 않는다 — 프로젝트 디렉터리가
+    #    하나도 남지 않았을 때 함께 지운다([W10]). 데이터를 남긴 철거(-PurgeData 없음)는 그 디렉터리가 남으므로 보존된다.
     $remaining = 0
     if (Test-Path -LiteralPath $Cfg.BaseDir) {
-        $remaining = @(Get-ChildItem -LiteralPath $Cfg.BaseDir -Directory -ErrorAction SilentlyContinue).Count
+        $remaining = @(Get-ChildItem -LiteralPath $Cfg.BaseDir -Directory -Force -ErrorAction SilentlyContinue |
+            Where-Object { ($_.FullName -ine $ToolsDir) -and ($_.FullName -ine $LegacyNpmDir) }).Count
     }
     if ($remaining -gt 0) {
-        Write-Info ('다른 프로젝트 디렉터리 {0}개가 남아 있습니다 — 공용 자원(작업 폴더 {1}, {2})은 보존합니다' -f $remaining, $Cfg.TaskFolder, $Cfg.BaseDir)
+        Write-Info ('프로젝트 디렉터리 {0}개가 남아 있습니다 — 공용 자원(작업 폴더 {1}, 데몬 전용 도구 {2})은 보존합니다' -f $remaining, $Cfg.TaskFolder, $ToolsDir)
     } else {
+        foreach ($shared in @($ToolsDir, $LegacyNpmDir)) {
+            if (Test-Path -LiteralPath $shared) {
+                Remove-Item -LiteralPath $shared -Recurse -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $shared) {
+                    Write-Warn ('데몬 전용 도구를 다 지우지 못했습니다(사용 중인 파일이 있습니다) — 직접 지우세요: {0}' -f $shared)
+                } else {
+                    Write-Info ('제거: {0} (데몬 전용 도구)' -f $shared)
+                }
+            }
+        }
         if (Test-Path -LiteralPath $Cfg.BaseDir) {
             Remove-Item -LiteralPath $Cfg.BaseDir -Force -ErrorAction SilentlyContinue
             if (-not (Test-Path -LiteralPath $Cfg.BaseDir)) {
@@ -960,7 +1521,7 @@ function Invoke-Uninstall {
 
 # 런처 작성 ([W3]). sh 의 /etc/clickeye/<project>.env + systemd EnvironmentFile 을 한 파일이 겸한다.
 function Write-DaemonLauncher {
-    param([hashtable]$Cfg, [hashtable]$Paths, [int]$Port, [string]$DaemonIdValue)
+    param([hashtable]$Cfg, [hashtable]$Paths, [int]$Port, [string]$DaemonIdValue, [hashtable]$Tools)
 
     # 토큰이 담기므로, **빈 파일을 먼저 만들고 ACL 을 잠근 뒤** 내용을 쓴다 — 평문이
     # 넓은 권한으로 디스크에 존재하는 창을 없앤다.
@@ -999,14 +1560,19 @@ function Write-DaemonLauncher {
     if (-not [string]::IsNullOrEmpty($Cfg.GhToken)) {
         $lines.Add(('set "GH_TOKEN={0}"'                -f (ConvertTo-CmdValue $Cfg.GhToken)))
     }
-    # npm 전역 설치 자리를 PATH 앞에 붙인다. 데몬은 SYSTEM 으로 돌고 SYSTEM 의 PATH 에는
-    # 이 경로가 없다 — 여기서 실어 주지 않으면 방금 설치한 claude 를 데몬이 찾지 못한다.
-    # 뒤에는 설치한 계정에게 보이던 도구(Agent CLI·node·git·gh)의 폴더를 붙인다(Get-ToolDirectories).
-    # ConvertTo-CmdValue 는 폴더에만 건다 — 가운데의 `%PATH%` 는 그대로 확장돼야 한다.
-    $toolPath = ''
-    $toolDirs = @(Get-ToolDirectories)
-    if ($toolDirs.Count -gt 0) { $toolPath = ';' + (ConvertTo-CmdValue ($toolDirs -join ';')) }
-    $lines.Add(('set "PATH={0};%PATH%{1}"'              -f (ConvertTo-CmdValue $script:NpmPrefix), $toolPath))
+    # 데몬이 쓰는 도구의 자리를 PATH 에 싣는다(Resolve-Toolchain 이 정했다). 데몬은 SYSTEM 으로 돌고 SYSTEM 의 PATH 에는
+    # 데몬 전용 도구 자리가 없다 — 여기서 실어 주지 않으면 방금 받아 놓은 claude·git·gh 를 데몬이 찾지 못한다.
+    # 앞에는 전용 사본, 뒤에는 호스트의 것이다. ConvertTo-CmdValue 는 폴더에만 건다 — 가운데의 `%PATH%` 는 그대로 확장돼야 한다.
+    $pre  = ''
+    $post = ''
+    if ($Tools.Prepend.Count -gt 0) { $pre  = (ConvertTo-CmdValue ($Tools.Prepend -join ';')) + ';' }
+    if ($Tools.Append.Count  -gt 0) { $post = ';' + (ConvertTo-CmdValue ($Tools.Append -join ';')) }
+    $lines.Add(('set "PATH={0}%PATH%{1}"' -f $pre, $post))
+    # Agent CLI 는 Windows 에서 Git for Windows 의 bash 로 명령을 돌린다. SYSTEM 계정에서는 그 자리를 스스로 찾지 못할 수
+    # 있어(사용자 설치·전용 사본) 찾은 자리를 알려 준다.
+    if (-not [string]::IsNullOrEmpty($Tools.GitBash)) {
+        $lines.Add(('set "CLAUDE_CODE_GIT_BASH_PATH={0}"' -f (ConvertTo-CmdValue $Tools.GitBash)))
+    }
     $lines.Add(('cd /d "{0}"'                           -f $Paths.ProjDir))
     $lines.Add(('"{0}"'                                 -f $Paths.BinDst))
 
@@ -1037,54 +1603,7 @@ function Invoke-Install {
         Stop-Install '작업 스케줄러 cmdlet(ScheduledTasks 모듈)이 없습니다 — Windows 8 / Server 2012 이상이 필요합니다'
     }
 
-    # Agent CLI — claude 또는 codex 중 최소 하나. 둘 다 없으면 잡을 실행할 수단이 없다.
-    # 실행 파일로 있는 것만 센다(Get-NativeCommandPath) — 데몬은 PowerShell 스크립트(.ps1)를 띄우지 못한다.
-    $agentClis = @()
-    if (-not [string]::IsNullOrEmpty((Get-NativeCommandPath 'claude'))) { $agentClis += 'claude' }
-    if (-not [string]::IsNullOrEmpty((Get-NativeCommandPath 'codex')))  { $agentClis += 'codex' }
-    if ($agentClis.Count -eq 0) {
-        Write-Info 'Agent CLI 가 없습니다 — 설치합니다 (claude)'
-        # 아래 2번의 $tmp 보다 앞이라 임시 디렉터리를 따로 잡는다. 전제 검사는 소스 확보보다
-        # 먼저 끝나야 한다 — 바이너리를 받아 놓고 CLI 설치에서 죽으면 치울 것이 늘어난다.
-        $agentTmp = Join-Path ([System.IO.Path]::GetTempPath()) ('clickeye-agent-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $agentTmp -Force | Out-Null
-        try {
-            Install-AgentCli -TempDir $agentTmp
-        } finally {
-            Remove-Item -LiteralPath $agentTmp -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        $agentClis = @('claude')
-    }
-
-    # git·Node 는 **기동 차단 사유가 아니다**(경고로 낮춘다) — sh 와 같은 판단.
-    # 근거: 무엇이 빠졌는지는 데몬이 접속 시 관제로 올려(daemon.hello.env) 콘솔이 한자리에서
-    # 보여준다. 설치 시점에 호스트마다 막아 세우는 것보다, 일단 붙여 놓고 콘솔에서
-    # 환경 미비를 한눈에 확인·보강하는 편이 운영 부담이 낮다.
-    if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Warn 'git 이 없습니다 — 잡 작업공간 provisioning 이 실패합니다. 설치를 계속하되 보강하세요 (winget install Git.Git)'
-        Write-Warn '  (부재 사실은 데몬이 접속 시 관제 콘솔에 환경 리포트로 올립니다)'
-    }
-    # gh — 작업의 결과(PR)를 만들고 콘솔 머지를 집행하는 도구다. clone·push 는 gh 없이도 저장소 토큰으로 되지만(데몬이 git 에
-    # 직접 잇는다), PR 생성은 gh 뿐이다 — 없으면 작업이 AI 단계를 다 돌린 뒤 맨 끝에서 실패한다. 로컬 저장소 모드만 쓰면 필요 없다.
-    if ([string]::IsNullOrEmpty((Get-NativeCommandPath 'gh'))) {
-        Write-Warn 'gh(GitHub CLI)가 없습니다 — 작업이 맨 끝(PR 생성)에서 실패하고 콘솔 머지도 되지 않습니다. 설치를 계속하되 보강하세요 (winget install GitHub.cli)'
-        Write-Warn '  (설치한 뒤 같은 명령을 다시 실행하면 런처 PATH 에 실립니다 — 부재 사실은 콘솔 데몬 카드의 「저장소 쓰기」에도 보입니다)'
-    }
-    $nodeDesc = 'none'
-    if ($null -eq (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Warn 'Node.js 가 없습니다 — Node 기반 AI CLI 실행에 필요합니다(권장 22+). 설치를 계속하되 보강하세요'
-        Write-Warn '  (부재 사실은 데몬이 접속 시 관제 콘솔에 환경 리포트로 올립니다)'
-    } else {
-        $nodeDesc = [string](& node -v 2>$null)
-        if ([string]::IsNullOrEmpty($nodeDesc)) { $nodeDesc = 'unknown' }
-        $m = [regex]::Match($nodeDesc, '^v?(\d+)')
-        if (-not $m.Success) {
-            Write-Warn ("node -v 출력을 해석할 수 없습니다: '{0}'" -f $nodeDesc)
-        } elseif ([int]$m.Groups[1].Value -lt 22) {
-            Write-Warn ('Node.js 22 이상을 권장합니다 (현재: {0}) — 설치는 계속합니다' -f $nodeDesc)
-        }
-    }
-
+    # 인자부터 본다 — 도구를 받아 놓는 데 몇 분이 걸리는데, 주소를 잘못 친 것을 그 뒤에 알리면 그 시간이 버려진다.
     if ([string]::IsNullOrEmpty($Cfg.CloudUrl)) {
         Show-Usage
         Stop-Install '-CloudUrl (또는 CLICKEYE_CLOUD_URL) 이 필요합니다 — Cloud WS 주소 (wss://<host>/ws/daemon)'
@@ -1115,6 +1634,31 @@ function Invoke-Install {
         Show-Usage
         Stop-Install '-Token (또는 CLICKEYE_CLOUD_TOKEN) 이 필요합니다 — 관제 콘솔의 데몬 토큰 화면에서 발급'
     }
+    # 런처에 적힐 값 ([W12]) — 큰따옴표·제어 문자·비 ASCII 는 받지 않는다.
+    Assert-LauncherValue -Name '-CloudUrl'     -Value $Cfg.CloudUrl
+    Assert-LauncherValue -Name '-Token'        -Value $Cfg.Token
+    Assert-LauncherValue -Name '-DaemonId'     -Value $Cfg.DaemonId
+    Assert-LauncherValue -Name '-AnthropicKey' -Value $Cfg.AnthropicKey
+    Assert-LauncherValue -Name '-OauthToken'   -Value $Cfg.OauthToken
+    Assert-LauncherValue -Name '-GhToken'      -Value $Cfg.GhToken
+
+    # ---------- 1-b. 설치 뿌리를 잠근다 ([W11]) ----------
+    # 무엇을 놓기 전에 한다 — 뿌리가 열려 있으면 그 아래 새로 만드는 폴더도 열린 채로 태어난다.
+    $rootWasOpen = @(Initialize-SecureDirectory -Path $Cfg.BaseDir -System $Cfg.SidSystem -Admins $Cfg.SidAdmins)[-1]
+    if ($rootWasOpen) {
+        Write-Info ('설치 뿌리를 잠갔습니다: {0} (이전 판은 프로젝트 폴더만 잠갔습니다 — ACL: SYSTEM+Administrators)' -f $Cfg.BaseDir)
+        Assert-LegacyToolDirClean -Path $LegacyNpmDir
+    }
+    [void](Initialize-SecureDirectory -Path $ToolsDir -System $Cfg.SidSystem -Admins $Cfg.SidAdmins)
+    # 프로젝트 폴더가 이미 있으면(재설치·선점) 지금 본다 — 도구를 몇 분 받아 놓은 뒤에 「이 폴더는 쓸 수 없다」고 하지 않도록.
+    # 없으면 3-1 에서 만든다.
+    if (Test-Path -LiteralPath $Paths.ProjDir) {
+        [void](Initialize-SecureDirectory -Path $Paths.ProjDir -System $Cfg.SidSystem -Admins $Cfg.SidAdmins)
+    }
+
+    # ---------- 1-c. 데몬이 쓰는 도구 ([W10]) ----------
+    # 바이너리 소스 확보보다 먼저 끝낸다 — 바이너리를 받아 놓고 CLI 설치에서 죽으면 치울 것이 늘어난다.
+    $tools = @(Resolve-Toolchain -Cfg $Cfg)[-1]
 
     # ---------- 2. 바이너리 소스 확보 ----------
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('clickeye-install-' + [Guid]::NewGuid().ToString('N'))
@@ -1140,12 +1684,12 @@ function Invoke-Install {
             } else {
                 $adjacent = Join-Path $Cfg.ScriptDir 'daemond.exe'
                 # -Channel 을 명시했으면 옆의 파일을 보지 않는다 — 채널을 고른 사람은 그 채널의 판을 원한다.
-                if ((-not $script:DistChannelSet) -and (Test-Path -LiteralPath $adjacent -PathType Leaf)) {
+                if ((-not $Cfg.DistChannelSet) -and (Test-Path -LiteralPath $adjacent -PathType Leaf)) {
                     $binSrc = $adjacent
                     Write-Info ('설치 소스: 로컬 바이너리 {0}' -f $binSrc)
                 } else {
                     $binSrc = Join-Path $tmp 'daemond.exe'
-                    Get-ReleaseBinary -Destination $binSrc -TempDir $tmp
+                    Get-ReleaseBinary -Cfg $Cfg -Destination $binSrc -TempDir $tmp
                 }
             }
         } elseif ($Cfg.SrcKind -eq 'zip') {
@@ -1184,17 +1728,20 @@ function Invoke-Install {
         if ([string]::IsNullOrEmpty($daemonIdValue)) {
             # 한 호스트에 데몬이 여러 개 뜨므로 hostname 만으로는 중복된다 — 프로젝트를 붙인다.
             $daemonIdValue = '{0}-{1}' -f $env:COMPUTERNAME, $Cfg.Project
+            # 컴퓨터 이름에 런처에 적을 수 없는 글자가 있으면 여기서 알린다(-DaemonId 로 직접 주면 된다).
+            Assert-LauncherValue -Name '데몬 식별자(컴퓨터 이름에서 만든 기본값 — -DaemonId 로 직접 지정하세요)' -Value $daemonIdValue
         }
 
         Write-Info ('전제 검사 통과 (project={0}, powershell={1}, agent-cli={2}, node={3})' -f `
-            $Cfg.Project, $PSVersionTable.PSVersion, ($agentClis -join ', '), $nodeDesc)
+            $Cfg.Project, $PSVersionTable.PSVersion, ($tools.AgentClis -join ', '), $tools.NodeDesc)
 
         # ---------- 3. 환경 세팅 → 데몬 배치 (멱등) ----------
-        # 3-1) 프로젝트 디렉터리. ACL 로 SYSTEM+Administrators 만 남긴다 ([W4]) —
+        # 3-1) 프로젝트 디렉터리. 소유자를 확인하고 ACL 로 SYSTEM+Administrators 만 남긴다 ([W4]·[W11]) —
         #      sh 의 0750 + 전용 사용자 소유에 대응하는, Windows 에서 달성 가능한 보호다.
+        #      **잠근 뒤에** 하위 폴더를 만든다 — 먼저 만들면 잠기기 전의 권한으로 태어난다.
+        [void](Initialize-SecureDirectory -Path $Paths.ProjDir -System $Cfg.SidSystem -Admins $Cfg.SidAdmins)
         New-Item -ItemType Directory -Path $Paths.DataDir -Force | Out-Null
         New-Item -ItemType Directory -Path $Paths.WorkDir -Force | Out-Null
-        Set-RestrictedAcl -Path $Paths.ProjDir -System $Cfg.SidSystem -Admins $Cfg.SidAdmins -Container
         Write-Info ('프로젝트 디렉터리: {0} (data, workspaces / ACL: SYSTEM+Administrators)' -f $Paths.ProjDir)
 
         # 3-2) 바이너리 — 이 작업이 실행 중이면 정지 후 교체 (업그레이드 경로).
@@ -1213,7 +1760,7 @@ function Invoke-Install {
             Set-RestrictedAcl -Path $backup -System $Cfg.SidSystem -Admins $Cfg.SidAdmins
             Write-Info ('기존 런처 백업: {0}' -f $backup)
         }
-        Write-DaemonLauncher -Cfg $Cfg -Paths $Paths -Port $port -DaemonIdValue $daemonIdValue
+        Write-DaemonLauncher -Cfg $Cfg -Paths $Paths -Port $port -DaemonIdValue $daemonIdValue -Tools $tools
         Write-Info ('런처 작성: {0} (ACL: SYSTEM+Administrators 만, localapi=127.0.0.1:{1})' -f $Paths.Launcher, $port)
 
         # ---------- 3-b. 연결 확인 ----------
@@ -1228,16 +1775,19 @@ function Invoke-Install {
         if ((-not [string]::IsNullOrEmpty($Cfg.AnthropicKey)) -or (-not [string]::IsNullOrEmpty($Cfg.OauthToken))) {
             # claude.cmd(또는 .exe)를 고른다 — claude.ps1 을 Start-Process 에 넘기면 예외가 나고, 그 예외가 아래 작업 등록까지
             # 건너뛰게 했다(런처만 있고 데몬은 뜨지 않는 설치가 남았다).
-            $claudeExe = Get-NativeCommandPath 'claude'
+            # 데몬이 쓸 바로 그 claude 로 확인한다(Resolve-Toolchain 이 고른 것) — 설치한 계정의 PATH 에 먼저 걸리는 다른 사본이 아니다.
+            $claudeExe = [string]$tools.Claude
             if (-not [string]::IsNullOrEmpty($claudeExe)) {
                 Write-Info '연결 확인: claude 를 한 번 호출합니다 (최대 90초)'
                 # 값을 인자로 넘기지 않는다 — 자식 프로세스 환경으로만 준다(프로세스 목록에 안 보인다).
-                $prevKey = $env:ANTHROPIC_API_KEY
-                $prevTok = $env:CLAUDE_CODE_OAUTH_TOKEN
-                $vcBase  = Join-Path ([System.IO.Path]::GetTempPath()) ('clickeye-agentcheck-' + [Guid]::NewGuid().ToString('N'))
+                $prevKey  = $env:ANTHROPIC_API_KEY
+                $prevTok  = $env:CLAUDE_CODE_OAUTH_TOKEN
+                $prevBash = $env:CLAUDE_CODE_GIT_BASH_PATH
+                $vcBase   = Join-Path ([System.IO.Path]::GetTempPath()) ('clickeye-agentcheck-' + [Guid]::NewGuid().ToString('N'))
                 try {
                     if (-not [string]::IsNullOrEmpty($Cfg.AnthropicKey)) { $env:ANTHROPIC_API_KEY = $Cfg.AnthropicKey }
                     if (-not [string]::IsNullOrEmpty($Cfg.OauthToken))   { $env:CLAUDE_CODE_OAUTH_TOKEN = $Cfg.OauthToken }
+                    if (-not [string]::IsNullOrEmpty($tools.GitBash))    { $env:CLAUDE_CODE_GIT_BASH_PATH = $tools.GitBash }
                     # 인자는 한 문자열로 준다 — 배열로 주면 따옴표 없이 이어 붙어 프롬프트가 첫 낱말에서 잘린다.
                     $proc = Start-Process -FilePath $claudeExe `
                         -ArgumentList '-p "Reply with exactly: OK"' `
@@ -1266,8 +1816,9 @@ function Invoke-Install {
                     # 확인 자체를 못 했다 — 설치는 계속한다(위 주석: 실패해도 설치를 되돌리지 않는다).
                     Write-Warn ('연결 확인을 실행하지 못했습니다 — 설치는 계속합니다: {0}' -f $_.Exception.Message)
                 } finally {
-                    $env:ANTHROPIC_API_KEY       = $prevKey
-                    $env:CLAUDE_CODE_OAUTH_TOKEN = $prevTok
+                    $env:ANTHROPIC_API_KEY         = $prevKey
+                    $env:CLAUDE_CODE_OAUTH_TOKEN   = $prevTok
+                    $env:CLAUDE_CODE_GIT_BASH_PATH = $prevBash
                     Remove-Item -LiteralPath ($vcBase + '.out'), ($vcBase + '.err') -Force -ErrorAction SilentlyContinue
                 }
             }
@@ -1328,7 +1879,7 @@ function Invoke-Main {
     # 설치 전용 인자가 하나라도 왔는가 — -Uninstall 과의 혼용 거부용 (sh 의 INSTALL_ARGS).
     # 환경변수 폴백은 여기 세지 않는다: sh 도 플래그로 온 것만 센다.
     $installArgs = $false
-    foreach ($n in @('CloudUrl', 'Token', 'Binary', 'Zip', 'Sha256', 'Git', 'GitRef', 'Channel', 'DaemonId', 'NoStart')) {
+    foreach ($n in @('CloudUrl', 'Token', 'Binary', 'Zip', 'Sha256', 'Git', 'GitRef', 'Channel', 'DaemonId', 'NoToolInstall', 'NoStart')) {
         if ($Bound.ContainsKey($n)) { $installArgs = $true }
     }
 
@@ -1370,11 +1921,16 @@ function Invoke-Main {
         if ($srcCount -gt 0) {
             Stop-Install '-Channel 은 소스 옵션(-Binary/-Zip/-Git)과 함께 쓸 수 없습니다 — 채널은 공개 배포 채널에서 받을 때만 고릅니다'
         }
-        $script:DistChannelSet = $true
+        $Cfg.DistChannelSet = $true
         if ($Cfg.Channel -eq 'edge') {
-            $script:DistChannel     = 'edge'
-            $script:DistReleaseBase = $script:DistEdgeBase
+            $Cfg.DistChannel = 'edge'
+            $Cfg.DistBase    = $DistEdgeBase
         }
+    }
+    # 평문 http:// 로 받는 아카이브는 체크섬 없이는 받지 않는다 — 가는 길에서 바뀐 파일이 SYSTEM 으로 돌게 된다.
+    # (https 는 경고만 한다: 사람이 고른 주소이고 전송 구간은 지켜진다.)
+    if ($Bound.ContainsKey('Zip') -and ($Cfg.Zip -match '^(?i)http://') -and (-not $Bound.ContainsKey('Sha256'))) {
+        Stop-Install '-Zip 의 주소가 평문 http:// 입니다 — -Sha256 <값|파일> 을 함께 주거나 https:// 주소를 쓰세요'
     }
     if ($Bound.ContainsKey('Sha256') -and $Cfg.SrcKind -ne 'zip') {
         Stop-Install '-Sha256 은 -Zip 과 함께만 쓸 수 있습니다'
@@ -1431,8 +1987,13 @@ $cfg = @{
     OauthToken   = $OauthToken
     # 저장소 토큰은 AI 자격과 배타적이지 않다 — 둘 다 필요하므로 한 쌍 검사에 넣지 않는다.
     GhToken      = $GhToken
+    NoToolInstall = [bool]$NoToolInstall
     NoStart      = [bool]$NoStart
     InsecureWs   = $false
+    # 공개 배포 채널 — Invoke-Main 이 -Channel 을 보고 바꾼다([W9]: 실행 중에 바뀌는 값은 여기 담는다).
+    DistChannel    = 'stable'
+    DistChannelSet = $false
+    DistBase       = $DistStableBase
     Uninstall    = [bool]$Uninstall
     PurgeData    = [bool]$PurgeData
     Help         = [bool]$Help
@@ -1458,6 +2019,10 @@ try {
     [Console]::Error.WriteLine($msg)
     $exitCode = 1
 }
+
+# 성공했든 실패했든, 명령줄로 받은 비밀값이 든 줄을 명령 기록에서 지운다 ([W12]).
+# 환경변수로 받은 토큰은 명령줄에 없었으므로 보지 않는다($Token 은 플래그로 온 값만 담는다).
+Clear-SecretsFromHistory -Secrets @($Token, $AnthropicKey, $OauthToken, $GhToken) -Path ''
 
 # 파일 실행이면 종료 코드를 세우고 끝낸다. 파이프 실행(scriptblock)에서 exit 를 부르면
 # 운영자의 관리자 콘솔 자체가 닫히므로 $LASTEXITCODE 만 남긴다 ([W9]).
